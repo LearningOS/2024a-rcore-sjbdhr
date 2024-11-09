@@ -1,5 +1,5 @@
 //! Implementation of physical and virtual address and page number.
-use super::PageTableEntry;
+use super::{page_table::PageTable, PageTableEntry};
 use crate::config::{PAGE_SIZE, PAGE_SIZE_BITS};
 use core::fmt::{self, Debug, Formatter};
 /// physical address
@@ -171,7 +171,7 @@ impl VirtPageNum {
 impl PhysAddr {
     ///Get mutable reference to `PhysAddr` value
     /// Get the mutable reference of physical address
-    pub fn get_mut<T>(&self) -> &'static mut T {
+    pub fn  get_mut<T>(&self) -> &'static mut T {
         unsafe { (self.0 as *mut T).as_mut().unwrap() }
     }
 }
@@ -271,3 +271,23 @@ where
 }
 /// a simple range structure for virtual page number
 pub type VPNRange = SimpleRange<VirtPageNum>;
+
+/// Translate virtual address to physical address
+pub fn virt_to_phys(token: usize, virtual_address: VirtAddr) -> Option<PhysAddr> {
+    let page_table = PageTable::from_token(token);
+    // 获取虚拟页号和页内偏移
+    let vpn = virtual_address.floor();
+    let offset = virtual_address.page_offset();
+
+    // 翻译虚拟页号，获取页表项
+    if let Some(entry) = page_table.translate(vpn) {
+        // 获取物理页号并计算物理地址
+        let ppn = entry.ppn();
+        let pa = PhysAddr::from(ppn.0 << PAGE_SIZE + offset);
+        Some(pa)
+    } else {
+        // 虚拟地址未被映射
+        None
+    }
+    
+}

@@ -14,7 +14,9 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
+use crate::config::MAX_SYSCALL_NUM;
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -23,6 +25,8 @@ use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
+
+use crate::timer::get_time_ms;
 
 /// The task manager, where all the tasks are managed.
 ///
@@ -79,6 +83,11 @@ impl TaskManager {
         let mut inner = self.inner.exclusive_access();
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
+        next_task.start_time = if next_task.start_time == 0{
+            get_time_ms()
+        } else {
+            next_task.start_time
+        };
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
@@ -140,6 +149,11 @@ impl TaskManager {
             let mut inner = self.inner.exclusive_access();
             let current = inner.current_task;
             inner.tasks[next].task_status = TaskStatus::Running;
+            inner.tasks[next].start_time = if inner.tasks[next].start_time == 0{
+                get_time_ms()
+            } else {
+                inner.tasks[next].start_time
+            };
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
@@ -202,3 +216,45 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
 }
+
+/// Get the current task.
+pub fn get_current_task_basic() -> (TaskStatus, usize, [u32; MAX_SYSCALL_NUM]) {
+    let inner = TASK_MANAGER.inner.exclusive_access();
+    (inner.tasks[inner.current_task].task_status, inner.tasks[inner.current_task].start_time, inner.tasks[inner.current_task].syscall_times)
+}
+
+/// Add a syscall times to the task.
+pub fn add_syscall_times(syscall_id: usize){
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let task_id = inner.current_task;
+    if task_id < inner.tasks.len() {
+        inner.tasks[task_id].syscall_times[syscall_id] += 1;
+    }
+}
+
+/// Map memory to the task.
+pub fn mmp(_start: usize, _end: usize, _permission: MapPermission) -> isize {
+    let start_va:VirtAddr = _start.into();
+    // Check if start address is page aligned
+    if !start_va.aligned() {
+        return -1;
+    }
+    // let mapArea = MapArea::new(start_va, end_va, MapType::Framed, _permission);
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    inner.tasks[current].memory_set.mmp(_start, _end, _permission)
+}
+
+/// Unmap memory from the task.
+pub fn munmap(_start: usize, _end: usize) -> isize {
+    let start_va:VirtAddr = _start.into();
+    // Check if start address is page aligned
+    if !start_va.aligned() {
+        return -1;
+    }
+    // let mapArea = MapArea::new(start_va, end_va, MapType::Framed, _permission);
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let current = inner.current_task;
+    inner.tasks[current].memory_set.munmap(_start, _end)
+}
+

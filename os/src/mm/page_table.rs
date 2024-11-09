@@ -1,5 +1,7 @@
 //! Implementation of [`PageTableEntry`] and [`PageTable`].
 
+use crate::config::PAGE_SIZE;
+
 use super::{frame_alloc, FrameTracker, PhysPageNum, StepByOne, VirtAddr, VirtPageNum};
 use alloc::vec;
 use alloc::vec::Vec;
@@ -8,13 +10,21 @@ use bitflags::*;
 bitflags! {
     /// page table entry flags
     pub struct PTEFlags: u8 {
+        /// valid
         const V = 1 << 0;
+        /// read
         const R = 1 << 1;
+        /// write
         const W = 1 << 2;
+        /// execute
         const X = 1 << 3;
+        /// user
         const U = 1 << 4;
+        /// global
         const G = 1 << 5;
+        /// accessed
         const A = 1 << 6;
+        /// dirty
         const D = 1 << 7;
     }
 }
@@ -170,4 +180,41 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
         start = end_va.into();
     }
     v
+}
+
+/// Write a u8 array to the ptr[u8] through page table
+pub fn write_in_by_va(token: usize, va: usize, v: &[u8]) -> isize {
+    let mut writen_len = 0;
+    let mut start = va as usize;
+    let end = start + v.len();
+    while start < end {
+        let start_va = VirtAddr::from(start);
+        let mut vpn = start_va.floor();
+        // let o_pa = virt_to_phys(token, start_va);
+        let ppn = PageTable::from_token(token)
+            .translate(vpn)
+            .unwrap()
+            .ppn();
+        vpn.step();
+        let mut end_va : VirtAddr = vpn.into();
+        end_va = end_va.min(VirtAddr::from(end));
+
+        let data_slice : &[u8];
+
+        if end_va.page_offset() == 0 {
+            data_slice = &v[writen_len..writen_len + (PAGE_SIZE - start_va.page_offset())];
+            writen_len += PAGE_SIZE - start_va.page_offset();
+        } else {
+            data_slice = &v[writen_len..writen_len + (end_va.page_offset() - start_va.page_offset())];
+            writen_len += end_va.page_offset() - start_va.page_offset();
+        }
+        
+        let ppn_mut : &mut u8 = ppn.get_mut();
+        let target_ptr = (ppn_mut as *mut u8).wrapping_add(start_va.page_offset());
+        unsafe {
+            core::ptr::copy_nonoverlapping(data_slice.as_ptr(), target_ptr, data_slice.len());
+        }
+        start = end_va.into();
+    }
+    0
 }
